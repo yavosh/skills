@@ -6,18 +6,21 @@ description: >-
   subagent attacks it → orchestrator triages the findings and sends
   them back to the coder). Max 3 review loops. Triages the issue as security /
   bug / feature and shapes the plan, gates, and review dimensions accordingly.
-  Language-agnostic — detects the toolchain and runs its native gates. Accepts
-  a GitHub issue (`#142`, issue URL) or a plain-text problem description.
-  Stops at an open PR; merging is the human's call. Invoke as /yavosh:work.
+  Language- and forge-agnostic — detects the toolchain (Go, .NET, Node, Python,
+  Rust, JVM, or whatever CI declares) and the forge (GitHub via `gh`, GitLab via
+  `glab`) and runs their native commands. Accepts a GitHub/GitLab issue (`#142`,
+  issue URL), a Jira key (`ABC-123`), or a plain-text problem description.
+  Stops at an open PR/MR; merging is the human's call. Invoke as /yavosh:work.
 model: opus
 ---
 
 # work
 
 You are the **orchestrator** (Opus — pinned by this skill's frontmatter). You
-take **one** issue to an open, reviewed PR. Two kinds of subagent do the work —
-a **coder** (Sonnet) and a **reviewer** (Fable, falling back to Opus when
-Fable is unavailable) — and you alone touch `git` and `gh`.
+take **one** issue to an open, reviewed PR (GitHub) or MR (GitLab) — "PR" below
+means either. Two kinds of subagent do the work — a **coder** (Sonnet) and a
+**reviewer** (Fable, falling back to Opus when Fable is unavailable) — and you
+alone touch `git` and the forge CLI (`gh` / `glab`).
 
 Your job is the parts a subagent cannot do: understanding the issue, designing
 the plan, judging the reviewer's findings, and owning git state. Do not delegate
@@ -26,9 +29,13 @@ the plan and do not delegate the triage of findings.
 ## 0. Preconditions (check once, up front)
 
 - `git rev-parse --git-dir` — is this a git repo?
-- `gh auth status` and `git remote -v` — is there an authenticated GitHub remote?
-  - **Yes** → full path: branch → commit → PR.
-  - **No** → degraded path: branch → commit, no PR. Say so up front.
+- **Detect the forge** from `git remote -v`: a `github.com` host → `gh`; a
+  `gitlab.com` or self-hosted GitLab host → `glab`. Confirm auth with
+  `gh auth status` / `glab auth status`. Record the CLI; every forge command
+  below is written as `gh` with the `glab` equivalent in brackets.
+  - **Authenticated forge** → full path: branch → commit → PR.
+  - **No forge / not authenticated** → degraded path: branch → commit, no PR.
+    Say so up front.
 - `git status` — note pre-existing dirt. **Shared checkout hazard:** other
   Claude sessions may share this checkout — ignore stray files/dirs that aren't
   yours. Never stage them: add your own files by name, never `git add -A`/`.`.
@@ -47,16 +54,25 @@ the plan and do not delegate the triage of findings.
     often names them: `README.md`, `CLAUDE.md`, a config example), and the
     house doc style.
   - **Comments** — density, length, and what a comment is for.
-  - **Everything else stated as a rule** — naming, error strings, receivers,
-    banned calls, commit and attribution rules, scope limits.
+  - **Everything else stated as a rule** — naming, error strings, banned
+    APIs, branch naming, commit format, attribution trailers, draft-vs-ready
+    PRs, "ask before push", scope limits. Steps 5, 7 and 9 defer to what you
+    record here.
 
 ## 1. Resolve the issue
 
 Parse the invocation argument:
-- `#N` or an issue URL → `gh issue view <N> --json number,title,body,labels,comments`.
-  Read the comments too — the real reproduction is often there, not in the body.
+- `#N` or a forge issue URL → `gh issue view <N> --json number,title,body,labels,comments`
+  [`glab issue view <N> --comments`]. Read the comments too — the real
+  reproduction is often there, not in the body.
+- A Jira key (`ABC-123`) or Jira URL → fetch it through the Atlassian MCP
+  tools if configured (`getJiraIssue`); otherwise ask the human to paste the
+  text. Record the key: it goes in the branch name, commit subject, and PR title
+  if the repo's conventions say so.
 - Anything else → treat the argument as the problem statement verbatim.
 - No argument → ask the human what to work on. Do not guess.
+
+Record the **issue key** (`#N`, `ABC-123`, or none) — steps 5, 7 and 9 use it.
 
 Restate the issue in your own words in one or two sentences, including what you
 believe the **observable wrong behaviour** is (or the wanted new behaviour). If
@@ -110,29 +126,45 @@ of these must pass before you commit:
 | Marker | Format | Lint | Test | Build |
 |---|---|---|---|---|
 | `go.mod` | `goimports -w .` / `gofmt -w .` | `golangci-lint run ./...` or `go vet ./...` | `go test ./... -race` | `go build ./...` |
+| `*.sln` / `*.csproj` / `Directory.Build.props` | `dotnet format <sln>` (check: `--verify-no-changes`) | analyzers run inside `dotnet build`; `dotnet format analyzers <sln>` if `.editorconfig` enables them | `dotnet test <sln>` (`--filter` for the CI's unit/integration split) | `dotnet build <sln> -warnaserror` if CI does, else `dotnet build <sln>` |
 | `package.json` | `prettier --write` (if configured) | `npm run lint` | `npm test` | `npm run build` / `tsc --noEmit` |
 | `pyproject.toml` | `ruff format` / `black` | `ruff check` / `flake8` | `pytest` | `mypy` (if configured) |
 | `Cargo.toml` | `cargo fmt` | `cargo clippy -- -D warnings` | `cargo test` | `cargo build` |
+| `pom.xml` / `build.gradle(.kts)` | `spotless:apply` / `spotlessApply` (if configured) | `checkstyle` / `detekt` (if configured) | `mvn test` / `gradle test` | `mvn -q compile` / `gradle build -x test` |
 | other | whatever `Makefile` / CI config declares | | | |
 
-**Prefer what CI runs.** Read `.github/workflows/*` or the `Makefile` and use
-those exact commands — they are the real contract. Only fall back to the table
-above when there is no CI. If a command in the table does not exist in the repo,
-skip it; do not install tooling.
+**Prefer what CI runs.** Read the CI definition — `.github/workflows/*`,
+`.gitlab-ci.yml` (and any `include:`d files), `azure-pipelines.yml`,
+`Jenkinsfile` — and the `Makefile`, and use those exact commands: they are the
+real contract. Only fall back to the table above when there is no CI. If a
+command in the table does not exist in the repo, skip it; do not install
+tooling.
+
+Some gates need services CI provides (a database, a message broker). Detect
+this from the CI job (`services:`, a `docker compose` step) and run only the
+jobs that work locally; name the ones you skipped in the report. Where the
+solution has several test projects or CI splits tests into jobs, mirror that
+split — a `dotnet test` on the whole solution can take far longer than the
+unit job you actually need.
 
 Print the gate list you resolved. If you find **no** test command at all, say so
 — an unverifiable change is a finding in itself.
 
 ## 5. Branch
 
-Resolve the default branch (`gh repo view --json defaultBranchRef` or
-`git symbolic-ref refs/remotes/origin/HEAD`). **Do not check out the default
-branch** — the shared checkout means switching or pulling it can clobber
-another session's work. Prefer an isolated worktree (`EnterWorktree` /
-`git worktree add`) when available; otherwise branch straight off the remote
-ref: `git fetch origin && git checkout -b <type>/<short-slug> origin/<default>`
-(no remote: `git checkout -b <type>/<short-slug> <default>`). `<type>` is `fix`
-for security/bug and `feat` for feature.
+Resolve the default branch: `git symbolic-ref refs/remotes/origin/HEAD` first
+(forge-agnostic); fall back to `gh repo view --json defaultBranchRef`
+[`glab repo view`]. **Do not check out the default branch** — the shared
+checkout means switching or pulling it can clobber another session's work.
+Prefer an isolated worktree (`EnterWorktree` / `git worktree add`) when
+available; otherwise branch straight off the remote ref:
+`git fetch origin && git checkout -b <branch> origin/<default>` (no remote:
+`git checkout -b <branch> <default>`).
+
+**Branch name:** use the convention recorded in step 0 if the repo or the
+global directives state one. Otherwise `<type>/<issue-key>-<short-slug>` when
+there is an issue key (`fix/abc-123-null-payee`), else `<type>/<short-slug>`.
+`<type>` is `fix` for security/bug and `feat` for feature. Lowercase throughout.
 
 **Verify the branch** (`git branch --show-current`) — the shared checkout means
 you can end up somewhere unexpected. Record the base for the review loop:
@@ -155,7 +187,7 @@ Give it:
 - the instruction to add or adjust tests,
 - the instruction to update the docs the repo requires for this change — the doc
   edit is part of the change, not a follow-up,
-- the instruction to run **no** `git` or `gh` commands.
+- the instruction to run **no** `git`, `gh` or `glab` commands.
 
 It returns a summary of its edits. You own the tree.
 
@@ -181,11 +213,16 @@ invisible to it:
 - `git add` each file by name (never `-A`/`.` — shared checkout), then
   `git status` — **confirm every file your change touched is staged** and
   nothing stray is. A forgotten `git add` ships an incomplete PR.
-- First commit: Conventional Commit subject (`fix(scope): …` /
-  `feat(scope): …`); the body explains the *why* and ends with the Claude
-  co-author trailer the harness specifies for the running model.
-- Later rounds: `fix: address review findings (round N)` — same co-author
-  trailer on every commit.
+- **Subject format:** the convention recorded in step 0 wins (many repos
+  want the issue key first: `ABC-123: short description`). With no stated
+  convention, mirror `git log --oneline -20`; if that is inconsistent too, use
+  Conventional Commits (`fix(scope): …` / `feat(scope): …`). The body explains
+  the *why*.
+- **Attribution trailer:** follow the recorded conventions. If they forbid AI
+  attribution, add none. If they are silent, add the trailer the harness
+  specifies for the running model. Never add one the conventions forbid.
+- Later rounds: same format, subject "address review findings (round N)" —
+  same trailer rule on every commit.
 
 ## 8. Review loop — max 3 rounds
 
@@ -212,13 +249,18 @@ stamp:
     auth gaps, parser/encoder divergence, unbounded resources.
   - **Functionality regression** — does it break legitimate flows? existing
     tests, edge inputs, the default/flag-off path being byte-identical.
-  - **Stability** — panics, nil derefs, races/locking, resource leaks.
+  - **Stability** — crashes and unhandled exceptions, null/nil dereferences,
+    races/locking, leaked resources (connections, handles, streams), and the
+    stack's own async traps — e.g. in .NET: a dropped `CancellationToken`,
+    sync-over-async (`.Result`/`.Wait()`), `async void`, a disposable not
+    disposed; in Go: goroutine leaks, unchecked errors.
 - **Conventions compliance — a fourth dimension, always checked, never weighted
   away.** Give it the style-doc paths from step 0 (project *and* global) and tell
   it to read them, then judge the added and changed lines against them. Four
   things to check, not just the first:
-  - **Code style** — naming, error strings, receivers, banned calls, the idioms
-    the docs mandate.
+  - **Code style** — naming, error strings, banned APIs, and the idioms the
+    docs mandate (Go receivers and error wrapping; C# records, `sealed`,
+    nullable annotations, `CancellationToken` flow — whatever the repo lists).
   - **Documentation** — did the change touch behaviour the docs describe, and
     did the diff update them? Name the specific files the repo requires (a repo
     that says "keep `README.md`, `CLAUDE.md`, and the config example fresh with
@@ -284,16 +326,26 @@ the plan was wrong — say that in the report.
 `git status` — confirm nothing of yours is left uncommitted (the commits
 happened in step 7).
 
-Then `git push -u origin <branch>` and `gh pr create` with a body containing:
+**Pushing publishes the branch.** If the recorded conventions say "ask before
+the first push", stop here, print the push and PR commands, and wait.
+Otherwise `git push -u origin <branch>`.
+
+Then open the PR: `gh pr create` [`glab mr create`]. Open it as a **draft**
+(`--draft` on both CLIs) when the conventions ask for drafts. Title: the lead
+commit's subject. Body:
 - what changed and why,
-- **`Fixes #N`** when the input was a GitHub issue (so a merge auto-closes it),
+- the closing reference — **`Fixes #N`** (GitHub) / **`Closes #N`** (GitLab)
+  when the input was a forge issue, or the Jira key when it was a Jira issue,
 - what the review caught and you fixed,
-- declined / deferred / unresolved findings.
+- declined / deferred / unresolved findings,
+- how it was tested — the gates that ran, and any you had to skip.
+
+Apply the same attribution rule as commits (step 7) to the PR body.
 
 **Do not merge.** The PR stays open. Merging is the human's call.
 
-If there is no GitHub remote (step 0), stop after the last commit and say the
-branch name.
+If there is no authenticated forge (step 0), stop after the last commit and
+say the branch name.
 
 ## 10. Report
 
@@ -311,7 +363,7 @@ Give a concise summary:
 - **Never push to the default branch.** Feature branch always. One issue per
   branch/PR.
 - **Never merge.** The PR is the deliverable.
-- **You own all git/gh state.** Subagents never run `git` or `gh`.
+- **You own all git and forge state.** Subagents never run `git`, `gh` or `glab`.
 - **Never chain git in parallel tool calls** — they race on `.git/index.lock`;
   chain with `&&`.
 - **Stage by name.** Never `git add -A`/`.` — the shared checkout has strays.
