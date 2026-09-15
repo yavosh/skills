@@ -1,0 +1,15 @@
+{
+  "name": "yavosh-skills",
+  "description": "Claude Code skills by yavosh.",
+  "owner": {
+    "name": "yavosh",
+    "url": "https://github.com/yavosh"
+  },
+  "plugins": [
+    {
+      "name": "yavosh",
+      "source": "./",
+      "description": "Drive an issue to a reviewed PR with an adversarial review loop (work), and save or resume session state across /clear (snapshot)."
+    }
+  ]
+}

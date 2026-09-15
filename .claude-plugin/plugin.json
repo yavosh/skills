@@ -1,0 +1,11 @@
+{
+  "name": "yavosh",
+  "description": "Drive an issue to a reviewed PR with an adversarial review loop (work), and save or resume session state across /clear (snapshot).",
+  "author": {
+    "name": "yavosh",
+    "url": "https://github.com/yavosh"
+  },
+  "homepage": "https://github.com/yavosh/skills",
+  "repository": "https://github.com/yavosh/skills",
+  "license": "MIT"
+}
