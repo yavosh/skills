@@ -9,7 +9,7 @@
     {
       "name": "yavosh",
       "source": "./",
-      "description": "Drive an issue to a reviewed PR with an adversarial review loop (work), and save or resume session state across /clear (snapshot)."
+      "description": "Drive an issue to a reviewed PR with an adversarial review loop (work), save or resume session state across /clear (snapshot), and find and prove concurrency bugs with TLA+ models (formal-verify)."
     }
   ]
 }
