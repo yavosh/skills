@@ -6,7 +6,7 @@ Claude Code skills, packaged as one plugin.
 |---|---|
 | `/yavosh:work` | Takes one GitHub issue or problem statement to an open, reviewed PR. An orchestrator plans the fix, a coder subagent implements it, and a reviewer subagent attacks it, for up to 3 rounds. |
 | `/yavosh:snapshot` | Saves the working state of a session to a file. After `/clear` or `/compact`, it briefs the fresh session from that file. |
-| `/yavosh:formal-verify` | Models risky code in TLA+ (or Lean) to find concurrency, state, and data-flow bugs. It confirms each bug with a failing test, fixes it, and leaves a rerunnable before/after proof in `specs/check.sh`. |
+| `/yavosh:formal-verify` | Models risky code in TLA+ and Lean 4 to find concurrency, state, and data-flow bugs. It replays real traces through each model, confirms each bug with a failing test, fixes it, and leaves a rerunnable before/after proof in `specs/check.sh`. With no target, it works every ranked module, one PR each. |
 
 ## Install
 
@@ -51,7 +51,7 @@ Restart Claude Code to apply the update.
   - git and an authenticated [GitHub CLI](https://cli.github.com/) (`gh`). Without a GitHub remote, it stops at a local commit and opens no PR.
   - Access to Opus and Sonnet. The reviewer uses Fable and falls back to Opus.
 - `snapshot`: git and a POSIX shell. It stores snapshots in `~/.claude/projects/<project>/snapshots/`, or under `$CLAUDE_CONFIG_DIR` when that variable is set.
-- `formal-verify`: git, Java, and `tla2tools.jar`. If Java or the jar is missing, the skill installs it (Java through Homebrew, the jar into `~/.local/share/tla/`). Lean is installed only when a target needs it.
+- `formal-verify`: git, Java, and `tla2tools.jar`. If Java or the jar is missing, the skill installs it (Java through Homebrew, the jar into `~/.local/share/tla/`). Lean (through `elan`) is installed only when a target needs it.
 
 ## License
 
