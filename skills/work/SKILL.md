@@ -222,11 +222,16 @@ only the delta.
 
 ### a. Reviewer
 
-If delegation is available, assign an independent **reviewer** agent. Use an
-available model. Give it `git diff <base>...HEAD`; you run git, while the reviewer
-may read repo files. If delegation fails or is unavailable, review the diff
-yourself and disclose that limitation. Prompt the reviewer to challenge the
-change:
+If delegation is available, assign an independent **reviewer** agent. Select
+the strongest available model: prefer Fable in Claude Code or `gpt-6-astra` in
+Codex when offered. If selection or execution fails because the model is
+unavailable or out of credits, try the next strongest available model. For
+example, try Opus or `gpt-6.1-sol`. Try each model at most once. Record the
+model that completes the review.
+
+Give the reviewer `git diff <base>...HEAD`; you run git, while it may read repo
+files. If no reviewer model runs, review the diff yourself and disclose that
+limitation. Prompt the reviewer to challenge the change:
 
 - "**Try HARD to break it.**"
 - Give it the issue and the plan, so it can also judge *whether the change
@@ -293,9 +298,11 @@ Re-run the gates (step 7).
 ### d. Re-review the delta
 
 Ask the same reviewer to review `git diff <prev-sha>..HEAD`. Use the agent's
-follow-up or resume tool. `<prev-sha>` is the commit it last reviewed. If no
-reviewer is available, review the delta yourself. Confirm each finding is closed
-and no new issue was introduced.
+follow-up or resume tool. `<prev-sha>` is the commit it last reviewed. If that
+model can no longer run, use the next available reviewer model. Give a replacement
+the full diff, issue, plan, and prior findings. If no reviewer is available,
+review the delta yourself. Confirm each finding is closed and no new issue was
+introduced.
 
 ### e. Exit conditions
 
@@ -354,6 +361,7 @@ Give a concise summary:
 - **What changed** — one line.
 - **What the review caught** and you fixed before the PR. This is the payoff —
   surface it.
+- **Reviewer model** — name the model used, or disclose a self-review.
 - **Declined / deferred / unresolved**, each with the reason.
 - **Non-goals** you named in the plan.
 - **Escalation**, if you flagged one in triage — what the human must decide.
