@@ -1,53 +1,44 @@
 ---
 name: work
 description: >-
-  Take one issue and drive it to a reviewed PR using a three-role loop
-  (orchestrator designs the plan → coder subagent implements it → reviewer
-  subagent attacks it → orchestrator triages the findings and sends
-  them back to the coder). Max 3 review loops. Triages the issue as security /
-  bug / feature and shapes the plan, gates, and review dimensions accordingly.
-  Language- and forge-agnostic — detects the toolchain (Go, .NET, Node, Python,
-  Rust, JVM, or whatever CI declares) and the forge (GitHub via `gh`, GitLab via
-  `glab`) and runs their native commands. Accepts a GitHub/GitLab issue (`#142`,
-  issue URL), a Jira key (`ABC-123`), or a plain-text problem description.
-  Stops at an open PR/MR; merging is the human's call. Invoke as /yavosh:work.
-model: opus
+  Take one GitHub, GitLab, or Jira issue, or a problem statement, through
+  planning, implementation, tests, and up to three review rounds to an open
+  PR or MR. Delegate coding and review when agents are available. Use as
+  $work in Codex or /yavosh:work in Claude Code.
 ---
 
 # work
 
-You are the **orchestrator** (Opus — pinned by this skill's frontmatter). You
-take **one** issue to an open, reviewed PR (GitHub) or MR (GitLab) — "PR" below
-means either. Two kinds of subagent do the work — a **coder** (Sonnet) and a
-**reviewer** (Fable, falling back to Opus when Fable is unavailable) — and you
-alone touch `git` and the forge CLI (`gh` / `glab`).
+You are the **coordinator**. Take **one** issue to an open, reviewed PR (GitHub)
+or MR (GitLab) — "PR" below
+means either. When agent delegation is available, assign implementation to a
+**coder** and independent review to a **reviewer**. You alone change git and
+forge state. When delegation is unavailable, implement and review directly;
+report that the review was your own.
 
-Your job is the parts a subagent cannot do: understanding the issue, designing
-the plan, judging the reviewer's findings, and owning git state. Do not delegate
-the plan and do not delegate the triage of findings.
+Your job is understanding the issue, designing the plan, judging the reviewer's
+findings, and owning git state. Do not delegate the plan or finding triage.
 
 ## 0. Preconditions (check once, up front)
 
 - `git rev-parse --git-dir` — is this a git repo?
-- **Detect the forge** from `git remote -v`: a `github.com` host → `gh`; a
-  `gitlab.com` or self-hosted GitLab host → `glab`. Confirm auth with
-  `gh auth status` / `glab auth status`. Record the CLI; every forge command
-  below is written as `gh` with the `glab` equivalent in brackets.
-  - **Authenticated forge** → full path: branch → commit → PR.
-  - **No forge / not authenticated** → degraded path: branch → commit, no PR.
+- **Detect the forge** from `git remote -v`: GitHub uses `gh`; GitLab uses
+  `git push` merge request options. Confirm GitHub auth with `gh auth status`.
+  For GitLab, check whether a push is authorized before publishing.
+  - **Authorized forge access** → full path: branch → commit → PR.
+  - **No forge access** → degraded path: branch → commit, no PR.
     Say so up front.
 - `git status` — note pre-existing dirt. **Shared checkout hazard:** other
-  Claude sessions may share this checkout — ignore stray files/dirs that aren't
+  agent sessions may share this checkout — ignore stray files/dirs that aren't
   yours. Never stage them: add your own files by name, never `git add -A`/`.`.
 - You are the **only** writer of git state. Subagents get code and context, not
   commit/PR authority.
 - **Resolve the conventions, project and global.** Read `CLAUDE.md` / `AGENTS.md` /
   `CONTEXT.md` at the repo root, every style doc they point at
   (`docs/code-style.md`, `CONTRIBUTING.md`, a `docs/style/` dir — whatever the
-  repo names), and the user's global directives at `~/.claude/CLAUDE.md` plus
-  anything it `@`-imports. Record the paths: the coder and the reviewer both get
-  them. If there is no such doc, say so — the surrounding code is then the only
-  standard.
+  repo names), and the active agent's global directives (for example,
+  `~/.claude/CLAUDE.md` or Codex instructions). Follow their imports. Record the
+  paths for the coder and reviewer. If no such doc exists, use surrounding code.
 - **Extract the directives the linter cannot see** from those files, and record
   them for the review. Three kinds recur:
   - **Documentation** — which docs must move with a behaviour change (a repo
@@ -62,8 +53,9 @@ the plan and do not delegate the triage of findings.
 ## 1. Resolve the issue
 
 Parse the invocation argument:
-- `#N` or a forge issue URL → `gh issue view <N> --json number,title,body,labels,comments`
-  [`glab issue view <N> --comments`]. Read the comments too — the real
+- `#N` or a forge issue URL → use the available forge tool or connector to read
+  the issue and comments (`gh issue view <N> --json number,title,body,labels,comments`
+  on GitHub). If none is available, ask for the issue text. The real
   reproduction is often there, not in the body.
 - A Jira key (`ABC-123`) or Jira URL → fetch it through the Atlassian MCP
   tools if configured (`getJiraIssue`); otherwise ask the human to paste the
@@ -100,8 +92,8 @@ Two guards:
 
 ## 3. Design the plan — you, not a subagent
 
-Read the relevant code yourself. Use the Explore agent for broad fan-out
-searches if you must, but read the files the fix will touch with your own eyes.
+Read the relevant code yourself. Delegate broad searches when useful, but read
+the files the fix will touch yourself.
 
 Write a plan with:
 - **Root cause** — the mechanism, at `file:line`. For a feature, the insertion
@@ -115,7 +107,7 @@ Write a plan with:
   go in the report.
 - **Risk** — what could break, and which existing test covers it.
 
-Print the plan before you spawn the coder — visible, not a blocking approval;
+Print the plan before implementation — visible, not a blocking approval;
 the human can interrupt. Keep it short — this is a work plan, not a design doc.
 
 ## 4. Detect the gates
@@ -125,20 +117,26 @@ of these must pass before you commit:
 
 | Marker | Format | Lint | Test | Build |
 |---|---|---|---|---|
-| `go.mod` | `goimports -w .` / `gofmt -w .` | `golangci-lint run ./...` or `go vet ./...` | `go test ./... -race` | `go build ./...` |
-| `*.sln` / `*.csproj` / `Directory.Build.props` | `dotnet format <sln>` (check: `--verify-no-changes`) | analyzers run inside `dotnet build`; `dotnet format analyzers <sln>` if `.editorconfig` enables them | `dotnet test <sln>` (`--filter` for the CI's unit/integration split) | `dotnet build <sln> -warnaserror` if CI does, else `dotnet build <sln>` |
-| `package.json` | `prettier --write` (if configured) | `npm run lint` | `npm test` | `npm run build` / `tsc --noEmit` |
-| `pyproject.toml` | `ruff format` / `black` | `ruff check` / `flake8` | `pytest` | `mypy` (if configured) |
-| `Cargo.toml` | `cargo fmt` | `cargo clippy -- -D warnings` | `cargo test` | `cargo build` |
-| `pom.xml` / `build.gradle(.kts)` | `spotless:apply` / `spotlessApply` (if configured) | `checkstyle` / `detekt` (if configured) | `mvn test` / `gradle test` | `mvn -q compile` / `gradle build -x test` |
+| `go.mod` | `goimports -w <changed-files>` / `gofmt -w <changed-files>` | `golangci-lint run ./...` or `go vet ./...` | `go test ./... -race` | `go build ./...` |
+| `*.sln` / `*.csproj` / `Directory.Build.props` | `dotnet format <sln> --include <changed-files>` (check: `--verify-no-changes`) | analyzers run inside `dotnet build` | `dotnet test <sln>` (`--filter` for the CI's unit/integration split) | `dotnet build <sln> -warnaserror` if CI does, else `dotnet build <sln>` |
+| `package.json` | `prettier --write <changed-files>` (if configured) | `npm run lint` | `npm test` | `npm run build` / `tsc --noEmit` |
+| `pyproject.toml` | `ruff format <changed-files>` / `black <changed-files>` | `ruff check` / `flake8` | `pytest` | `mypy` (if configured) |
+| `Cargo.toml` | `cargo fmt -- --check` | `cargo clippy -- -D warnings` | `cargo test` | `cargo build` |
+| `pom.xml` / `build.gradle(.kts)` | `spotless:check` / `spotlessCheck` (if configured) | `checkstyle` / `detekt` (if configured) | `mvn test` / `gradle test` | `mvn -q compile` / `gradle build -x test` |
 | other | whatever `Makefile` / CI config declares | | | |
 
 **Prefer what CI runs.** Read the CI definition — `.github/workflows/*`,
 `.gitlab-ci.yml` (and any `include:`d files), `azure-pipelines.yml`,
-`Jenkinsfile` — and the `Makefile`, and use those exact commands: they are the
-real contract. Only fall back to the table above when there is no CI. If a
+`Jenkinsfile` — and the `Makefile`, and use their verification commands.
+Only fall back to the table above when there is no CI. If a
 command in the table does not exist in the repo, skip it; do not install
 tooling.
+
+**Scope formatting and automatic fixes to this task's changed files.** Include
+new files, but exclude files changed only by someone else. Pass explicit paths.
+If a CI command rewrites files, scope it or use its check-only mode.
+When a formatter cannot limit writes, use check-only mode and fix the relevant
+lines manually. Inspect the diff before staging; leave unrelated formatting alone.
 
 Some gates need services CI provides (a database, a message broker). Detect
 this from the CI job (`services:`, a `docker compose` step) and run only the
@@ -152,11 +150,18 @@ Print the gate list you resolved. If you find **no** test command at all, say so
 
 ## 5. Branch
 
-Resolve the default branch: `git symbolic-ref refs/remotes/origin/HEAD` first
-(forge-agnostic); fall back to `gh repo view --json defaultBranchRef`
-[`glab repo view`]. **Do not check out the default branch** — the shared
-checkout means switching or pulling it can clobber another session's work.
-Prefer an isolated worktree (`EnterWorktree` / `git worktree add`) when
+Check the current branch and open PRs for this issue before creating a branch.
+Reuse an existing PR's source branch and target branch. Record its PR link.
+If that branch has a dedicated worktree, use it. If several PRs could match,
+ask which one to continue. If forge access is unavailable, inspect local
+branches and task context. Reuse a matching task branch even without an open PR.
+
+For new work without an existing branch, use the following procedure.
+Resolve the default branch with `git symbolic-ref refs/remotes/origin/HEAD`.
+Fall back to the available forge tool or remote metadata.
+**Do not check out the default branch.** The shared checkout can contain
+another session's work.
+Prefer an isolated worktree (`git worktree add` or an agent worktree tool) when
 available; otherwise branch straight off the remote ref:
 `git fetch origin && git checkout -b <branch> origin/<default>` (no remote:
 `git checkout -b <branch> <default>`).
@@ -166,15 +171,27 @@ global directives state one. Otherwise `<type>/<issue-key>-<short-slug>` when
 there is an issue key (`fix/abc-123-null-payee`), else `<type>/<short-slug>`.
 `<type>` is `fix` for security/bug and `feat` for feature. Lowercase throughout.
 
-**Verify the branch** (`git branch --show-current`) — the shared checkout means
-you can end up somewhere unexpected. Record the base for the review loop:
-`git rev-parse HEAD`. Then run the test gate once on this clean base and record
-any failures already present — step 7's bar is "no new failures".
+**Record the absolute worktree path.** Run all subsequent repository commands
+and gates with that working directory. Resolve repository file paths beneath it.
+Pass this path to every agent, including replacements and resumed agents.
+Creating a worktree does not change an agent's working directory.
+If it differs from the checkout used for planning, reread the planned files.
+Revise the plan and gate commands for the selected worktree before editing.
 
-## 6. Code it — coder subagent, with fallback
+**Verify the branch** with `git branch --show-current` in the selected worktree.
+For new work, record `git rev-parse HEAD` as `<base>` for the review loop.
+For a resumed branch, use its merge base with the PR target or default branch as `<base>`.
+This keeps earlier PR commits visible in the first review.
+Run the test gate before editing and record existing failures separately.
+Step 7's bar is "no new failures".
 
-Spawn a **coder** (general-purpose Agent, `model: sonnet`, run synchronously).
+## 6. Code it — coder, with fallback
+
+If delegation is available, assign a **coder** agent and wait for its result.
+Use an available model; do not require a provider-specific model name.
 Give it:
+- the absolute worktree path and the instruction to use it for every repository
+  read, edit, and command,
 - the issue statement and the class from step 2,
 - **your plan from step 3, verbatim** — it implements the plan, it does not
   redesign it,
@@ -187,17 +204,16 @@ Give it:
 - the instruction to add or adjust tests,
 - the instruction to update the docs the repo requires for this change — the doc
   edit is part of the change, not a follow-up,
-- the instruction to run **no** `git`, `gh` or `glab` commands.
+- the instruction to run **no** git or forge commands.
 
-It returns a summary of its edits. You own the tree.
+It returns a summary of its edits. You own the tree. If delegation is
+unavailable, implement the plan yourself.
 
-**If the coder disagrees with the plan**, it must say so in its return message
-rather than deviate silently. Then you decide: revise the plan, or restate it
-and re-spawn.
+**If the coder disagrees with the plan**, it must explain why before changing
+scope. Then decide whether to revise the plan.
 
-**Subagents die.** If the coder errors out (API/session limit, "connection
-closed") or returns incomplete work, **do not loop retrying it — take over and
-implement the plan directly.** Resuming a flaky agent wastes cycles.
+If the coder errors out or returns incomplete work, implement the remaining
+plan directly. Do not retry a failing agent repeatedly.
 
 ## 7. Gates, then checkpoint commit
 
@@ -218,9 +234,8 @@ invisible to it:
   convention, mirror `git log --oneline -20`; if that is inconsistent too, use
   Conventional Commits (`fix(scope): …` / `feat(scope): …`). The body explains
   the *why*.
-- **Attribution trailer:** follow the recorded conventions. If they forbid AI
-  attribution, add none. If they are silent, add the trailer the harness
-  specifies for the running model. Never add one the conventions forbid.
+- **Attribution trailer:** follow the recorded conventions. Add no AI
+  attribution unless the user or repository explicitly requires it.
 - Later rounds: same format, subject "address review findings (round N)" —
   same trailer rule on every commit.
 
@@ -231,14 +246,17 @@ only the delta.
 
 ### a. Reviewer
 
-Spawn a **reviewer** (general-purpose Agent, `model: fable`, synchronous). If
-the spawn or the run fails for ANY reason (credit/usage limit, model not
-available, the agent dies mid-review), re-spawn the SAME prompt once with
-`model: opus` and say in the report which model reviewed. Do not retry Fable
-in the same session after it has failed. Give the
-reviewer the output of `git diff <base>...HEAD` — you run the diff; it runs no
-git, but it may read repo files. Prompt it to be a genuine adversary, not a rubber
-stamp:
+If delegation is available, assign an independent **reviewer** agent. Select
+the strongest available model: prefer Fable in Claude Code or `gpt-6-astra` in
+Codex when offered. If selection or execution fails because the model is
+unavailable or out of credits, try the next strongest available model. For
+example, try Opus or `gpt-6.1-sol`. Try each model at most once. Record the
+model that completes the review.
+
+Give the reviewer `git diff <base>...HEAD`; you run git, while it may read repo
+files. Include the absolute worktree path and resolve its source reads there.
+If no reviewer model runs, review the diff yourself and disclose that
+limitation. Prompt the reviewer to challenge the change:
 
 - "**Try HARD to break it.**"
 - Give it the issue and the plan, so it can also judge *whether the change
@@ -296,17 +314,19 @@ round on nothing.
 
 ### c. Back to the coder
 
-Send the **fix** findings to the coder (resume the same coder via SendMessage so
-it keeps its context; spawn fresh only if it died). Give it your triage, not the
-raw review — including which findings you declined, so it does not re-add them.
+Send the **fix** findings to the coder. Use a follow-up or resume tool to start
+an idle agent; use messaging for an active agent. If no coder is available, fix
+them yourself. Give the coder your triage, including declined findings.
 
 Re-run the gates (step 7).
 
 ### d. Re-review the delta
 
-Resume the **same reviewer** (SendMessage; spawn fresh only if it died) with
-the delta, `git diff <prev-sha>..HEAD` — `<prev-sha>` is the commit it last
-reviewed. Ask it to confirm each finding is closed and that nothing new was
+Ask the same reviewer to review `git diff <prev-sha>..HEAD`. Use the agent's
+follow-up or resume tool. `<prev-sha>` is the commit it last reviewed. If that
+model can no longer run, use the next available reviewer model. Give a replacement
+the full diff, issue, plan, and prior findings. If no reviewer is available,
+review the delta yourself. Confirm each finding is closed and no new issue was
 introduced.
 
 ### e. Exit conditions
@@ -326,13 +346,28 @@ the plan was wrong — say that in the report.
 `git status` — confirm nothing of yours is left uncommitted (the commits
 happened in step 7).
 
-**Pushing publishes the branch.** If the recorded conventions say "ask before
-the first push", stop here, print the push and PR commands, and wait.
-Otherwise `git push -u origin <branch>`.
+**Pushing publishes the branch.** Follow the user's authorization and recorded
+conventions. If approval is required, stop with the prepared branch and PR text.
+If authorized, continue:
 
-Then open the PR: `gh pr create` [`glab mr create`]. Open it as a **draft**
-(`--draft` on both CLIs) when the conventions ask for drafts. Title: the lead
-commit's subject. Body:
+- **GitHub:** `git push -u origin <branch>`. Update an existing PR with
+  `gh pr edit <number>`, or use `gh pr create` for a new PR. Use a body file
+  for the PR text. Add `--draft` when creating a PR if conventions require it.
+- **GitLab:** create the MR with the branch push:
+
+  ```sh
+  git push -u origin <branch> -o merge_request.create \
+    -o merge_request.target=<default> -o merge_request.squash=true \
+    -o merge_request.remove_source_branch=true
+  ```
+
+  Add `-o merge_request.draft` when conventions require a draft. Set the title
+  and description with `merge_request.title` and `merge_request.description`.
+  Escape description newlines as `\n`; push options reject literal newlines.
+  For an existing MR, push to its source branch and retain its target branch.
+  Omit `merge_request.create` and include any required metadata updates in the push.
+
+Use the lead commit's subject as the title. The PR body covers:
 - what changed and why,
 - the closing reference — **`Fixes #N`** (GitHub) / **`Closes #N`** (GitLab)
   when the input was a forge issue, or the Jira key when it was a Jira issue,
@@ -344,7 +379,7 @@ Apply the same attribution rule as commits (step 7) to the PR body.
 
 **Do not merge.** The PR stays open. Merging is the human's call.
 
-If there is no authenticated forge (step 0), stop after the last commit and
+If there is no authorized forge access (step 0), stop after the last commit and
 say the branch name.
 
 ## 10. Report
@@ -354,6 +389,7 @@ Give a concise summary:
 - **What changed** — one line.
 - **What the review caught** and you fixed before the PR. This is the payoff —
   surface it.
+- **Reviewer model** — name the model used, or disclose a self-review.
 - **Declined / deferred / unresolved**, each with the reason.
 - **Non-goals** you named in the plan.
 - **Escalation**, if you flagged one in triage — what the human must decide.
@@ -363,7 +399,7 @@ Give a concise summary:
 - **Never push to the default branch.** Feature branch always. One issue per
   branch/PR.
 - **Never merge.** The PR is the deliverable.
-- **You own all git and forge state.** Subagents never run `git`, `gh` or `glab`.
+- **You own all git and forge state.** Subagents never run git or forge commands.
 - **Never chain git in parallel tool calls** — they race on `.git/index.lock`;
   chain with `&&`.
 - **Stage by name.** Never `git add -A`/`.` — the shared checkout has strays.
