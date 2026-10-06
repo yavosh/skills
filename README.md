@@ -42,6 +42,16 @@ claude plugin update yavosh@yavosh-skills
 
 Restart Claude Code to apply the update.
 
+For Codex, run these commands from the clone's default branch:
+
+```sh
+git pull --ff-only
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/work"
+cp skills/work/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/work/SKILL.md"
+```
+
+Restart Codex if the updated skill does not appear.
+
 ## Usage
 
 ```

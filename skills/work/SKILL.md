@@ -117,20 +117,26 @@ of these must pass before you commit:
 
 | Marker | Format | Lint | Test | Build |
 |---|---|---|---|---|
-| `go.mod` | `goimports -w .` / `gofmt -w .` | `golangci-lint run ./...` or `go vet ./...` | `go test ./... -race` | `go build ./...` |
-| `*.sln` / `*.csproj` / `Directory.Build.props` | `dotnet format <sln>` (check: `--verify-no-changes`) | analyzers run inside `dotnet build`; `dotnet format analyzers <sln>` if `.editorconfig` enables them | `dotnet test <sln>` (`--filter` for the CI's unit/integration split) | `dotnet build <sln> -warnaserror` if CI does, else `dotnet build <sln>` |
-| `package.json` | `prettier --write` (if configured) | `npm run lint` | `npm test` | `npm run build` / `tsc --noEmit` |
-| `pyproject.toml` | `ruff format` / `black` | `ruff check` / `flake8` | `pytest` | `mypy` (if configured) |
-| `Cargo.toml` | `cargo fmt` | `cargo clippy -- -D warnings` | `cargo test` | `cargo build` |
-| `pom.xml` / `build.gradle(.kts)` | `spotless:apply` / `spotlessApply` (if configured) | `checkstyle` / `detekt` (if configured) | `mvn test` / `gradle test` | `mvn -q compile` / `gradle build -x test` |
+| `go.mod` | `goimports -w <changed-files>` / `gofmt -w <changed-files>` | `golangci-lint run ./...` or `go vet ./...` | `go test ./... -race` | `go build ./...` |
+| `*.sln` / `*.csproj` / `Directory.Build.props` | `dotnet format <sln> --include <changed-files>` (check: `--verify-no-changes`) | analyzers run inside `dotnet build` | `dotnet test <sln>` (`--filter` for the CI's unit/integration split) | `dotnet build <sln> -warnaserror` if CI does, else `dotnet build <sln>` |
+| `package.json` | `prettier --write <changed-files>` (if configured) | `npm run lint` | `npm test` | `npm run build` / `tsc --noEmit` |
+| `pyproject.toml` | `ruff format <changed-files>` / `black <changed-files>` | `ruff check` / `flake8` | `pytest` | `mypy` (if configured) |
+| `Cargo.toml` | `cargo fmt -- --check` | `cargo clippy -- -D warnings` | `cargo test` | `cargo build` |
+| `pom.xml` / `build.gradle(.kts)` | `spotless:check` / `spotlessCheck` (if configured) | `checkstyle` / `detekt` (if configured) | `mvn test` / `gradle test` | `mvn -q compile` / `gradle build -x test` |
 | other | whatever `Makefile` / CI config declares | | | |
 
 **Prefer what CI runs.** Read the CI definition — `.github/workflows/*`,
 `.gitlab-ci.yml` (and any `include:`d files), `azure-pipelines.yml`,
-`Jenkinsfile` — and the `Makefile`, and use those exact commands: they are the
-real contract. Only fall back to the table above when there is no CI. If a
+`Jenkinsfile` — and the `Makefile`, and use their verification commands.
+Only fall back to the table above when there is no CI. If a
 command in the table does not exist in the repo, skip it; do not install
 tooling.
+
+**Scope formatting and automatic fixes to this task's changed files.** Include
+new files, but exclude files changed only by someone else. Pass explicit paths.
+If a CI command rewrites files, scope it or use its check-only mode.
+When a formatter cannot limit writes, use check-only mode and fix the relevant
+lines manually. Inspect the diff before staging; leave unrelated formatting alone.
 
 Some gates need services CI provides (a database, a message broker). Detect
 this from the CI job (`services:`, a `docker compose` step) and run only the
@@ -144,6 +150,13 @@ Print the gate list you resolved. If you find **no** test command at all, say so
 
 ## 5. Branch
 
+Check the current branch and open PRs for this issue before creating a branch.
+Reuse an existing PR's source branch and target branch. Record its PR link.
+If that branch has a dedicated worktree, use it. If several PRs could match,
+ask which one to continue. If forge access is unavailable, inspect local
+branches and task context. Reuse a matching task branch even without an open PR.
+
+For new work without an existing branch, use the following procedure.
 Resolve the default branch with `git symbolic-ref refs/remotes/origin/HEAD`.
 Fall back to the available forge tool or remote metadata.
 **Do not check out the default branch.** The shared checkout can contain
@@ -158,16 +171,27 @@ global directives state one. Otherwise `<type>/<issue-key>-<short-slug>` when
 there is an issue key (`fix/abc-123-null-payee`), else `<type>/<short-slug>`.
 `<type>` is `fix` for security/bug and `feat` for feature. Lowercase throughout.
 
-**Verify the branch** (`git branch --show-current`) — the shared checkout means
-you can end up somewhere unexpected. Record the base for the review loop:
-`git rev-parse HEAD`. Then run the test gate once on this clean base and record
-any failures already present — step 7's bar is "no new failures".
+**Record the absolute worktree path.** Run all subsequent repository commands
+and gates with that working directory. Resolve repository file paths beneath it.
+Pass this path to every agent, including replacements and resumed agents.
+Creating a worktree does not change an agent's working directory.
+If it differs from the checkout used for planning, reread the planned files.
+Revise the plan and gate commands for the selected worktree before editing.
+
+**Verify the branch** with `git branch --show-current` in the selected worktree.
+For new work, record `git rev-parse HEAD` as `<base>` for the review loop.
+For a resumed branch, use its merge base with the PR target or default branch as `<base>`.
+This keeps earlier PR commits visible in the first review.
+Run the test gate before editing and record existing failures separately.
+Step 7's bar is "no new failures".
 
 ## 6. Code it — coder, with fallback
 
 If delegation is available, assign a **coder** agent and wait for its result.
 Use an available model; do not require a provider-specific model name.
 Give it:
+- the absolute worktree path and the instruction to use it for every repository
+  read, edit, and command,
 - the issue statement and the class from step 2,
 - **your plan from step 3, verbatim** — it implements the plan, it does not
   redesign it,
@@ -230,7 +254,8 @@ example, try Opus or `gpt-6.1-sol`. Try each model at most once. Record the
 model that completes the review.
 
 Give the reviewer `git diff <base>...HEAD`; you run git, while it may read repo
-files. If no reviewer model runs, review the diff yourself and disclose that
+files. Include the absolute worktree path and resolve its source reads there.
+If no reviewer model runs, review the diff yourself and disclose that
 limitation. Prompt the reviewer to challenge the change:
 
 - "**Try HARD to break it.**"
@@ -325,8 +350,9 @@ happened in step 7).
 conventions. If approval is required, stop with the prepared branch and PR text.
 If authorized, continue:
 
-- **GitHub:** `git push -u origin <branch>`, then `gh pr create`. Use a body file
-  for the PR text. Add `--draft` when conventions require a draft.
+- **GitHub:** `git push -u origin <branch>`. Update an existing PR with
+  `gh pr edit <number>`, or use `gh pr create` for a new PR. Use a body file
+  for the PR text. Add `--draft` when creating a PR if conventions require it.
 - **GitLab:** create the MR with the branch push:
 
   ```sh
@@ -338,6 +364,8 @@ If authorized, continue:
   Add `-o merge_request.draft` when conventions require a draft. Set the title
   and description with `merge_request.title` and `merge_request.description`.
   Escape description newlines as `\n`; push options reject literal newlines.
+  For an existing MR, push to its source branch and retain its target branch.
+  Omit `merge_request.create` and include any required metadata updates in the push.
 
 Use the lead commit's subject as the title. The PR body covers:
 - what changed and why,
