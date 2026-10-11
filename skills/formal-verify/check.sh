@@ -18,6 +18,7 @@ for f in checks.txt *.checks; do [[ -f "$f" ]] && files+=("$f"); done
 meta="$(mktemp -d)"
 trap 'rm -rf "$meta"' EXIT
 status=0
+checks=0
 
 run_tlc() {
   if [[ -z "${JAVA:-}" ]]; then
@@ -55,17 +56,26 @@ run_lean() {
   fi
 }
 
-while read -r spec cfg expect note; do
-  [[ -z "${spec:-}" || "$spec" == \#* ]] && continue
-  got=error detail=""
-  if [[ "$spec" == lean ]]; then run_lean; else run_tlc; fi
-  mark=ok
-  [[ "$got" == "$expect" ]] || { mark=BAD; status=1; }
-  if [[ "$got" == error ]]; then
-    printf '%-3s  %-36s expect=%-4s got=%-5s %s\n' "$mark" "$cfg" "$expect" "$got" "${note:-}"
-    printf '     %s\n' "$detail"
-  else
-    printf '%-3s  %-36s expect=%-4s got=%-5s %s\n' "$mark" "$cfg" "$expect" "$got" "${detail:-${note:-}}"
-  fi
-done < <(cat "${files[@]}")
+for f in "${files[@]}"; do
+  while read -r spec cfg expect note || [[ -n "${spec:-}" ]]; do
+    [[ -z "${spec:-}" || "$spec" == \#* ]] && continue
+    if [[ -z "$cfg" || ( "$expect" != pass && "$expect" != fail ) ]]; then
+      printf 'invalid check in %s: expected <spec> <config> <pass|fail> [note...]\n' "$f" >&2
+      status=1
+      continue
+    fi
+    checks=$((checks + 1))
+    got=error detail=""
+    if [[ "$spec" == lean ]]; then run_lean; else run_tlc; fi
+    mark=ok
+    [[ "$got" == "$expect" ]] || { mark=BAD; status=1; }
+    if [[ "$got" == error ]]; then
+      printf '%-3s  %-36s expect=%-4s got=%-5s %s\n' "$mark" "$cfg" "$expect" "$got" "${note:-}"
+      printf '     %s\n' "$detail"
+    else
+      printf '%-3s  %-36s expect=%-4s got=%-5s %s\n' "$mark" "$cfg" "$expect" "$got" "${detail:-${note:-}}"
+    fi
+  done < "$f"
+done
+[[ "$checks" -gt 0 ]] || { echo "no executable checks found" >&2; exit 2; }
 exit "$status"

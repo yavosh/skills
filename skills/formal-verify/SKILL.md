@@ -8,9 +8,10 @@ description: >-
   (specs/check.sh). Use when the user asks to formally verify a project, model
   it in TLA+/Lean, hunt race conditions, deadlocks, or lost updates, or prove a
   fix. Language-agnostic, with bug shapes for Go, Java, .NET, async
-  TypeScript/Python, and databases. Invoke as /yavosh:formal-verify [target],
+  TypeScript/Python, and databases. Invoke as $formal-verify in Codex or
+  /yavosh:formal-verify in Claude Code, with an optional target,
   where target is a component, file, or bug hypothesis; with no target it
-  surveys the repo and works every ranked target, one PR per module.
+  surveys the repo and reports ranked targets without changing code.
 ---
 
 # formal-verify
@@ -24,28 +25,43 @@ Examples: which area when two are equally risky, or anything that touches prod o
 shared state. Otherwise pick the top-ranked option, say which one, and proceed.
 
 **Scope:**
-- `/yavosh:formal-verify <target>`: work only that target.
-- `/yavosh:formal-verify` with no target: survey the repo, then work every
-  ranked target (at most 5). Each module gets its own branch and PR.
+- With a target: work only that target.
+- With no target: survey the repo and report ranked targets. Stop before implementation.
+- Work multiple targets only when the user requests a batch (at most 5).
+  Each module gets its own branch and PR.
 
 ## 0. Preconditions
 
-- Read the repo's `CLAUDE.md` / `AGENTS.md` / style docs, and `~/.claude/CLAUDE.md`.
+For survey-only runs, inspect repository instructions and Git state. Skip branch creation and tool installation.
+
+- Read the repo's `CLAUDE.md` / `AGENTS.md` / style docs and the active agent's global directives.
   They set commit, branch, PR, and attribution rules. Follow them over anything here.
 - `git status`. If the tree has someone else's uncommitted work, use a worktree.
   Each target gets one branch from the default branch: `formal/<target>`.
   You own all git state. Subagents never run `git` or forge commands.
-- Install the tools only if they are missing:
+- Reuse the repository's toolchain when available. Install tools only if they are missing.
+  If `JAVA` is configured, validate it with `command -v "$JAVA"` and reuse it.
+  An invalid configured path is a setup error; do not replace it silently.
+  Otherwise locate Java with `command -v java`. Use the host's package manager if it is missing.
+  For Homebrew, resolve the Java path with `brew --prefix openjdk` after installation.
+  Download a specific TLA+ release rather than a moving `latest` URL:
 
   ```bash
-  command -v java || brew install openjdk        # use "$(brew --prefix openjdk)/bin/java"
-  test -f ~/.local/share/tla/tla2tools.jar || { mkdir -p ~/.local/share/tla && \
-    curl -sSLo ~/.local/share/tla/tla2tools.jar \
-    https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar; }
-  # Lean only when a target needs it:
-  command -v lake || { curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
-    | sh -s -- -y && source ~/.elan/env; }
+  if [ -n "${TLA2TOOLS:-}" ]; then
+    test -f "$TLA2TOOLS" || { echo "configured TLA2TOOLS file is missing" >&2; exit 1; }
+  else
+    TLA2TOOLS="$HOME/.local/share/tla/tla2tools.jar"
+    test -f "$TLA2TOOLS" || { mkdir -p "$(dirname "$TLA2TOOLS")" && \
+      curl -fSLo "$TLA2TOOLS" \
+      https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar; }
+  fi
   ```
+
+  Install Lean through `elan` only when a target needs it.
+  Use the host's package manager or a specific release.
+  Keep the Lake project's `lean-toolchain` file.
+  Record Java, TLC, and Lean versions in the proof notes.
+  Set `JAVA` and `TLA2TOOLS` when their paths differ from the runner's defaults.
 
 ## 1. Survey
 
@@ -55,7 +71,7 @@ actor runs a state machine with many exits. Search for the
 
 Rank the top 3–5 targets by risk. For each target, list the actors, the shared
 state, and the invariants that must hold. Tell the user the ranking in a short
-table. Then work the given target, or every ranked target when none was given.
+table. Without a target, stop after the survey. Otherwise work only the requested targets.
 
 Pick the tool by target:
 - **TLA+**: several actors, interleavings, crashes, retries, leases. TLC checks
@@ -67,9 +83,10 @@ Pick the tool by target:
 - **Both**: a state machine that several actors drive. Use TLA+ for the
   interleavings and Lean for the step invariants at any size.
 
-With more than one target, write the models in parallel: one subagent per
+With more than one target and delegation available, write the models in parallel: one subagent per
 target. Give each subagent the target's files, its actors and invariants, and
 section 2 or 3 of this skill. Subagents write only under `specs/`.
+Without delegation, write and review the models directly; disclose the self-review.
 
 ## 2. Model in TLA+
 
@@ -109,8 +126,8 @@ Write `specs/<Name>.tla` and `specs/<Name>.cfg` in the repo.
 Run TLC:
 
 ```bash
-"$(brew --prefix openjdk)/bin/java" -XX:+UseParallelGC -cp ~/.local/share/tla/tla2tools.jar \
-  tlc2.TLC -workers auto -metadir "$TMPDIR/tlc" -config specs/<Name>.cfg specs/<Name>
+"${JAVA:-java}" -XX:+UseParallelGC -cp "${TLA2TOOLS:-$HOME/.local/share/tla/tla2tools.jar}" \
+  tlc2.TLC -workers auto -metadir "${TMPDIR:-/tmp}/tlc" -config specs/<Name>.cfg specs/<Name>
 ```
 
 TLA+ pitfalls:
@@ -162,6 +179,9 @@ cd specs/lean/<Name> && lake build && lake env lean Audit.lean
 A model that rejects real behavior proves nothing about the code. Before you
 trust any result, replay real traces through the model.
 
+Accepted traces support the model's accuracy; they do not prove complete correspondence with the code.
+TLC checks the configured bounds. Lean proves properties of the written model.
+
 1. Add temporary logging at each modeled transition. Log every model variable,
    one line per transition.
 2. Run the existing tests, and a real run if it is cheap. Collect the logs.
@@ -203,8 +223,9 @@ Prove each trace with `example : replay init trace7 = true := by decide`.
 
 ## 5. Review each model independently
 
-For each model, spawn a fresh reviewer (general-purpose Agent, `model: fable`;
-if Fable is unavailable, use `model: opus`). Give it the source files, the model,
+For each model, spawn a fresh reviewer using an available model.
+If delegation is unavailable or fails, review directly and disclose that limitation.
+Give the reviewer the source files, the model,
 and the replay results, but not your reasoning. It checks that:
 
 - Each action or step matches its cited `file:line`: guards, writes, atomicity.
@@ -284,6 +305,7 @@ lean                lean/SessionPhase             pass    proofs, replays, audit
 on a real property violation or a deadlock, never on a parse error. A `lean`
 line passes only when the project builds, and `Audit.lean` shows no `sorry` and
 only the standard axioms.
+Malformed records and manifests without executable checks fail the runner.
 
 Also:
 - **Enforce each assumption in code.** Add a cheap test that fails when an

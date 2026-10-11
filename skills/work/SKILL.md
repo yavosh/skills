@@ -31,6 +31,9 @@ findings, and owning git state. Do not delegate the plan or finding triage.
 - `git status` — note pre-existing dirt. **Shared checkout hazard:** other
   agent sessions may share this checkout — ignore stray files/dirs that aren't
   yours. Never stage them: add your own files by name, never `git add -A`/`.`.
+  If a file you need or the index already has unrelated edits, use an isolated worktree.
+  If isolation is unavailable, stage only your hunks and inspect the staged diff.
+  Preserve existing staged changes; never include them in your checkpoint commit.
 - You are the **only** writer of git state. Subagents get code and context, not
   commit/PR authority.
 - **Resolve the conventions, project and global.** Read `CLAUDE.md` / `AGENTS.md` /
@@ -79,7 +82,7 @@ Classify as exactly one. The class drives the plan, the gates, and the review.
 |---|---|---|---|
 | **security** | vulnerability, bypass, injection, auth gap, resource exhaustion, leak | the attacker model, and a test that fails before the fix | security ≫ regression > stability |
 | **bug** | wrong output, crash, race, regression from working behaviour | a failing test that reproduces it first | regression ≈ stability > security |
-| **feature** | new capability, new flag, new endpoint | the interface (signature/flag/route), and the default-off path staying byte-identical | regression > stability > security |
+| **feature** | new capability, new flag, new endpoint | the interface (signature/flag/route), and the intended default behavior | regression > stability > security |
 
 Two guards:
 - **Under-specified feature** — if the issue asks for a capability but does not
@@ -229,6 +232,10 @@ invisible to it:
 - `git add` each file by name (never `-A`/`.` — shared checkout), then
   `git status` — **confirm every file your change touched is staged** and
   nothing stray is. A forgotten `git add` ships an incomplete PR.
+  For files with unrelated edits, stage only your hunks as required in step 0.
+  Inspect `git diff --cached` before committing, including any pre-existing staged files.
+  If unrelated staged changes remain and isolation is unavailable, leave your work uncommitted.
+  Report the blocker.
 - **Subject format:** the convention recorded in step 0 wins (many repos
   want the issue key first: `ABC-123: short description`). With no stated
   convention, mirror `git log --oneline -20`; if that is inconsistent too, use
@@ -266,7 +273,7 @@ limitation. Prompt the reviewer to challenge the change:
   - **Security** — can it still be exploited? bypasses, injection, smuggling,
     auth gaps, parser/encoder divergence, unbounded resources.
   - **Functionality regression** — does it break legitimate flows? existing
-    tests, edge inputs, the default/flag-off path being byte-identical.
+    tests, edge inputs, default behavior, and unchanged flag-off behavior when required.
   - **Stability** — crashes and unhandled exceptions, null/nil dereferences,
     races/locking, leaked resources (connections, handles, streams), and the
     stack's own async traps — e.g. in .NET: a dropped `CancellationToken`,

@@ -1,12 +1,12 @@
 # yavosh skills
 
-Claude Code skills, packaged as one plugin. The `work` skill also runs in Codex.
+Agent skills for Claude Code and Codex, packaged as a Claude Code plugin.
 
 | Skill | What it does |
 |---|---|
 | `/yavosh:work` or `$work` in Codex | Takes one issue or problem statement to an open, reviewed PR or MR. A coordinator plans the fix, delegates coding and review when agents are available, and triages findings for up to 3 rounds. |
-| `/yavosh:snapshot` | Saves the working state of a session to a file. After `/clear` or `/compact`, it briefs the fresh session from that file. |
-| `/yavosh:formal-verify` | Models risky code in TLA+ and Lean 4 to find concurrency, state, and data-flow bugs. It replays real traces through each model, confirms each bug with a failing test, fixes it, and leaves a rerunnable before/after proof in `specs/check.sh`. With no target, it works every ranked module, one PR each. |
+| `/yavosh:snapshot` or `$snapshot` in Codex | Saves session state to a unique file. It resumes a selected task or the latest snapshot in a fresh session. |
+| `/yavosh:formal-verify` or `$formal-verify` in Codex | Models risky code in TLA+ and Lean 4. It replays real traces, confirms bugs with failing tests, fixes them, and leaves checks in `specs/check.sh`. With no target, it reports ranked targets without changing code. |
 
 ## Install
 
@@ -24,14 +24,18 @@ claude plugin marketplace add yavosh/skills
 claude plugin install yavosh@yavosh-skills
 ```
 
-To use `work` in Codex, run this from the cloned repository:
+To install the skills in Codex, run this from the cloned repository:
 
 ```sh
-mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/work"
-cp skills/work/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/work/SKILL.md"
+mkdir -p "$HOME/.agents/skills"
+cp -R skills/work skills/snapshot skills/formal-verify "$HOME/.agents/skills/"
 ```
 
-Invoke it as `$work` in Codex.
+Copy whole skill directories so `formal-verify/check.sh` is included.
+Invoke them as `$work`, `$snapshot`, or `$formal-verify` in Codex.
+For repository-scoped installation, use `.agents/skills/` in that repository.
+These are the [currently documented Codex skill locations](https://learn.chatgpt.com/docs/build-skills).
+Older installations under `~/.codex/skills` may still work. Avoid keeping duplicate copies with the same skill names.
 
 ## Update
 
@@ -46,8 +50,8 @@ For Codex, run these commands from the clone's default branch:
 
 ```sh
 git pull --ff-only
-mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/work"
-cp skills/work/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/work/SKILL.md"
+mkdir -p "$HOME/.agents/skills"
+cp -R skills/work skills/snapshot skills/formal-verify "$HOME/.agents/skills/"
 ```
 
 Restart Codex if the updated skill does not appear.
@@ -59,18 +63,44 @@ Restart Codex if the updated skill does not appear.
 /yavosh:work the login form accepts empty passwords
 /yavosh:snapshot save indent-fix
 /yavosh:snapshot resume
+/yavosh:snapshot resume indent-fix
 /yavosh:snapshot list
 /yavosh:formal-verify
 /yavosh:formal-verify the outbox dispatcher
 ```
+
+In Codex:
+
+```
+$work #142
+$snapshot save indent-fix
+$snapshot resume indent-fix
+$formal-verify
+$formal-verify the outbox dispatcher
+```
+
+Request a batch explicitly to verify multiple targets, with one branch and PR per module.
 
 ## Requirements
 
 - `work`:
   - git and an authenticated [GitHub CLI](https://cli.github.com/) (`gh`) for GitHub PRs. GitLab MRs use git push options.
   - Agent delegation is optional. Without it, the coordinator codes and reviews directly.
-- `snapshot`: git and a POSIX shell. It stores snapshots in `~/.claude/projects/<project>/snapshots/`, or under `$CLAUDE_CONFIG_DIR` when that variable is set.
-- `formal-verify`: git, Java, and `tla2tools.jar`. If Java or the jar is missing, the skill installs it (Java through Homebrew, the jar into `~/.local/share/tla/`). Lean (through `elan`) is installed only when a target needs it.
+- `snapshot`: git, a POSIX shell, and `mktemp`. It stores snapshots under `~/.local/state/agent-snapshots/`, shared across worktrees. Set `SNAPSHOT_DIR` to override the directory or resume existing Claude snapshots.
+- `formal-verify`: git, Java, and `tla2tools.jar`. Missing Java uses the host's package manager. The jar download uses TLA+ v1.7.4. Lean (through `elan`) is installed only when a target needs it. Set `JAVA` or `TLA2TOOLS` for custom paths.
+
+## Validation
+
+Run the verification runner's regression tests:
+
+```sh
+python3 -B -m unittest discover -s tests -v
+bash -n skills/formal-verify/check.sh
+```
+
+The tests use tool fixtures and require no Java, TLA+, or Lean installation.
+They validate runner behavior. Complete Codex and Claude Code workflows require separate validation.
+Model proofs and trace replays do not prove complete correspondence with the implementation.
 
 ## License
 
